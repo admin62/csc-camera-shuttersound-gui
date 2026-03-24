@@ -211,7 +211,8 @@ public class ShutterSoundGUI extends JFrame {
 
         private final List<String> ADB_FILES_LINUX = Arrays.asList(
             "adb", "etc1tool", "fastboot", "hprof-conv", "make_f2fs", "make_f2fs_casefold",
-            "mke2fs", "mke2fs.conf", "NOTICE.txt", "source.properties", "sqlite3"
+            "mke2fs", "mke2fs.conf", "NOTICE.txt", "source.properties", "sqlite3",
+            "lib64/libc++.so"
         );
 
         private Path adbExecutable;
@@ -228,8 +229,9 @@ public class ShutterSoundGUI extends JFrame {
                 fileList = ADB_FILES_WINDOWS;
                 execName = "adb.exe";
             } else if (os.contains("linux")) {
-                // Return immediately for Linux as requested
-                return "Linux support is currently under development. Please use Windows for now.";
+                resourceFolder = "/adb-linux/";
+                fileList = ADB_FILES_LINUX;
+                execName = "adb";
             } else {
                 return "Unsupported Operating System: " + os;
             }
@@ -259,22 +261,23 @@ public class ShutterSoundGUI extends JFrame {
 
             if (deviceAuthorized) {
                 publish("Checking shutter sound setting...");
-                CommandResult getSoundResult = executeCommand(adbExecutable.toString(), "shell", "settings", "get", "system", "csc_pref_camera_forced_shut_ter_sound_key");
+                CommandResult getSoundResult = executeCommand(adbExecutable.toString(), "shell", "settings", "get", "system", "csc_pref_camera_forced_shutter_sound_key");
                 String currentSetting = getSoundResult.stdout.trim();
 
                 if ("1".equals(currentSetting)) {
                     publish("Disabling shutter sound...");
-                    executeCommand(adbExecutable.toString(), "shell", "settings", "put", "system", "csc_pref_camera_forced_shut_ter_sound_key", "0");
-                    CommandResult verifyResult = executeCommand(adbExecutable.toString(), "shell", "settings", "get", "system", "csc_pref_camera_forced_shut_ter_sound_key");
+                    executeCommand(adbExecutable.toString(), "shell", "settings", "put", "system", "csc_pref_camera_forced_shutter_sound_key", "0");
+                    CommandResult verifyResult = executeCommand(adbExecutable.toString(), "shell", "settings", "get", "system", "csc_pref_camera_forced_shutter_sound_key");
                     if ("0".equals(verifyResult.stdout.trim())) {
                         return "Success! Camera shutter sound disabled.";
                     } else {
-                        return "Error: Failed to disable shutter sound.";
+                        return "Error: Failed to disable shutter sound. (Value: " + verifyResult.stdout.trim() + ")";
                     }
                 } else if ("0".equals(currentSetting)) {
                     return "Already disabled. No action needed.";
                 } else {
-                    return "Could not determine shutter sound status.";
+                    publish("Unexpected status: " + currentSetting);
+                    return "Could not determine shutter sound status. (Output: " + currentSetting + ")";
                 }
             } else {
                 return "Timeout: No authorized device found.";
@@ -324,9 +327,17 @@ public class ShutterSoundGUI extends JFrame {
                 } catch (IOException ex) { /* ignore */ }
             }));
             for (String fileName : fileList) {
+                Path targetPath = tempDir.resolve(fileName);
+                Files.createDirectories(targetPath.getParent()); // Ensure subdirectories exist
+                
                 try (InputStream is = ShutterSoundGUI.class.getResourceAsStream(resourceFolder + fileName)) {
                     if (is == null) throw new IOException("Cannot find resource: " + resourceFolder + fileName);
-                    Files.copy(is, tempDir.resolve(fileName), StandardCopyOption.REPLACE_EXISTING);
+                    Files.copy(is, targetPath, StandardCopyOption.REPLACE_EXISTING);
+                }
+                
+                // Set executable permission for Linux
+                if (!System.getProperty("os.name").toLowerCase().contains("win")) {
+                    targetPath.toFile().setExecutable(true);
                 }
             }
             return tempDir;
@@ -334,6 +345,7 @@ public class ShutterSoundGUI extends JFrame {
 
         private CommandResult executeCommand(String... command) throws IOException, InterruptedException {
             ProcessBuilder pb = new ProcessBuilder(command);
+            pb.redirectErrorStream(true); // Combine stdout and stderr
             Process process = pb.start();
             StringBuilder stdout = new StringBuilder();
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
