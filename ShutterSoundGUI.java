@@ -260,7 +260,14 @@ public class ShutterSoundGUI extends JFrame {
 
             for (int i = 0; i < 12; i++) {
                 CommandResult adbDevicesResult = executeCommand(adbExecutable.toString(), "devices");
-                String adbDevicesOutput = adbDevicesResult.stdout;
+                String adbDevicesOutput = adbDevicesResult.stdout.trim();
+
+                // Log the raw adb devices output
+                if (adbDevicesOutput.equals("List of devices attached")) {
+                    publish("adb devices: No device found.");
+                } else {
+                    publish("adb devices output:\n" + adbDevicesOutput);
+                }
 
                 if (adbDevicesOutput.matches("(?s).*List of devices attached.*\\sdevice\\s*")) {
                     publish("Device is authorized.");
@@ -306,7 +313,12 @@ public class ShutterSoundGUI extends JFrame {
         @Override
         protected void process(List<String> chunks) {
             for (String message : chunks) {
-                statusLabel.setText(message);
+                // Show only the first line on the status label to keep it clean
+                if (message.contains("\n")) {
+                    statusLabel.setText(message.split("\n")[0] + " ...");
+                } else {
+                    statusLabel.setText(message);
+                }
                 logArea.append("[" + getTimestamp() + "] > " + message + "\n");
             }
             // Auto-scroll to the bottom
