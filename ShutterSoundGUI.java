@@ -24,6 +24,11 @@ public class ShutterSoundGUI extends JFrame {
     private final JButton donateButton;
     private final JButton langButton;
     private ResourceBundle bundle;
+    private final float scaleFactor;
+
+    private int scale(int value) {
+        return (int) (value * scaleFactor);
+    }
 
     public ShutterSoundGUI() {
         // 기본 언어 설정 (시스템 언어 우선, 없으면 한국어)
@@ -38,8 +43,13 @@ public class ShutterSoundGUI extends JFrame {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
         } catch (Exception ignored) {}
 
-        setSize(700, 500); 
-        setMinimumSize(new Dimension(650, 480)); // Set minimum size to prevent layout breakage
+        // Calculate Scale Factor based on system font size (base 12)
+        Font systemFont = UIManager.getFont("Label.font");
+        float baseSize = (systemFont != null) ? systemFont.getSize2D() : 12.0f;
+        this.scaleFactor = baseSize / 12.0f;
+
+        setSize(scale(700), scale(500)); 
+        setMinimumSize(new Dimension(scale(650), scale(480))); // Set minimum size to prevent layout breakage
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
         setResizable(true);
@@ -47,7 +57,7 @@ public class ShutterSoundGUI extends JFrame {
         // Main panel with a clean background and padding
         JPanel panel = new JPanel(new GridBagLayout());
         panel.setBackground(Color.WHITE);
-        panel.setBorder(BorderFactory.createEmptyBorder(20, 30, 20, 30));
+        panel.setBorder(BorderFactory.createEmptyBorder(scale(20), scale(30), scale(20), scale(30)));
 
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.fill = GridBagConstraints.HORIZONTAL;
@@ -56,40 +66,40 @@ public class ShutterSoundGUI extends JFrame {
 
         // Title/Header Label
         headerLabel = new JLabel("", SwingConstants.CENTER);
-        headerLabel.setFont(new Font(Font.DIALOG, Font.BOLD, 18));
+        headerLabel.setFont(systemFont != null ? systemFont.deriveFont(Font.BOLD, baseSize * 1.5f) : new Font(Font.DIALOG, Font.BOLD, scale(18)));
         headerLabel.setForeground(new Color(33, 33, 33));
         gbc.gridy = 0;
-        gbc.insets = new Insets(0, 0, 10, 0);
+        gbc.insets = new Insets(0, 0, scale(10), 0);
         panel.add(headerLabel, gbc);
 
         // Status Label (Current Step)
         statusLabel = new JLabel("", SwingConstants.CENTER);
-        statusLabel.setFont(new Font(Font.DIALOG, Font.PLAIN, 14));
+        statusLabel.setFont(systemFont != null ? systemFont.deriveFont(baseSize * 1.15f) : new Font(Font.DIALOG, Font.PLAIN, scale(14)));
         statusLabel.setForeground(new Color(66, 66, 66));
         gbc.gridy = 1;
-        gbc.insets = new Insets(0, 0, 15, 0);
+        gbc.insets = new Insets(0, 0, scale(15), 0);
         panel.add(statusLabel, gbc);
 
         // Progress Bar
         progressBar = new JProgressBar();
         progressBar.setIndeterminate(true);
-        progressBar.setPreferredSize(new Dimension(progressBar.getPreferredSize().width, 8));
+        progressBar.setPreferredSize(new Dimension(progressBar.getPreferredSize().width, scale(8)));
         progressBar.setForeground(new Color(0, 120, 215)); 
         progressBar.setBackground(new Color(230, 230, 230));
         progressBar.setBorderPainted(false);
         gbc.gridy = 2;
-        gbc.insets = new Insets(0, 0, 15, 0);
+        gbc.insets = new Insets(0, 0, scale(15), 0);
         panel.add(progressBar, gbc);
 
         // Log Area
         logArea = new JTextArea();
         logArea.setEditable(false);
-        logArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        logArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, scale(12)));
         logArea.setBackground(new Color(245, 245, 245));
-        logArea.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+        logArea.setBorder(BorderFactory.createEmptyBorder(scale(5), scale(5), scale(5), scale(5)));
         
         JScrollPane scrollPane = new JScrollPane(logArea);
-        scrollPane.setPreferredSize(new Dimension(400, 150));
+        scrollPane.setPreferredSize(new Dimension(scale(400), scale(150)));
         scrollPane.setBorder(BorderFactory.createLineBorder(new Color(220, 220, 220)));
         gbc.gridy = 3;
         gbc.weighty = 1.0;
@@ -98,12 +108,12 @@ public class ShutterSoundGUI extends JFrame {
         panel.add(scrollPane, gbc);
 
         // Bottom Panel for Buttons
-        JPanel bottomPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
+        JPanel bottomPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, scale(10), 0));
         bottomPanel.setBackground(Color.WHITE);
 
         // Language Switch Button
         langButton = new JButton("KO | EN");
-        langButton.setFont(new Font(Font.DIALOG, Font.PLAIN, 12));
+        langButton.setFont(systemFont != null ? systemFont.deriveFont(baseSize) : new Font(Font.DIALOG, Font.PLAIN, scale(12)));
         langButton.setForeground(new Color(100, 100, 100));
         langButton.setContentAreaFilled(false);
         langButton.setBorderPainted(false);
@@ -113,7 +123,7 @@ public class ShutterSoundGUI extends JFrame {
 
         // Donate Button
         donateButton = new JButton("");
-        donateButton.setFont(new Font(Font.DIALOG, Font.PLAIN, 12));
+        donateButton.setFont(systemFont != null ? systemFont.deriveFont(baseSize) : new Font(Font.DIALOG, Font.PLAIN, scale(12)));
         donateButton.setForeground(new Color(0, 120, 215));
         donateButton.setContentAreaFilled(false);
         donateButton.setBorderPainted(false);
@@ -125,7 +135,7 @@ public class ShutterSoundGUI extends JFrame {
         gbc.weighty = 0;
         gbc.fill = GridBagConstraints.NONE;
         gbc.anchor = GridBagConstraints.EAST;
-        gbc.insets = new Insets(10, 0, 0, 0);
+        gbc.insets = new Insets(scale(10), 0, 0, 0);
         panel.add(bottomPanel, gbc);
 
         add(panel);
@@ -152,13 +162,18 @@ public class ShutterSoundGUI extends JFrame {
 
     private void showDonateDialog() {
         JDialog dialog = new JDialog(this, bundle.getString("ui.dialog.donate.title"), true);
-        dialog.setSize(600, 600);
-        dialog.setMinimumSize(new Dimension(400, 400));
+        dialog.setSize(scale(600), scale(600));
+        dialog.setMinimumSize(new Dimension(scale(400), scale(400)));
         dialog.setLocationRelativeTo(this);
         dialog.setResizable(true);
 
         JTabbedPane tabbedPane = new JTabbedPane();
-        tabbedPane.setFont(new Font("Segoe UI", Font.BOLD, 14));
+        Font systemFont = UIManager.getFont("Label.font");
+        if (systemFont != null) {
+            tabbedPane.setFont(systemFont.deriveFont(Font.BOLD, systemFont.getSize2D() * 1.15f));
+        } else {
+            tabbedPane.setFont(new Font(Font.DIALOG, Font.BOLD, scale(14)));
+        }
 
         tabbedPane.addTab(bundle.getString("ui.tab.naver"), createImageLabel("donate_npay.png"));
         tabbedPane.addTab(bundle.getString("ui.tab.toss"), createImageLabel("donate_toss.png"));
