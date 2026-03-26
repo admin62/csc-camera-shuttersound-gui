@@ -232,18 +232,91 @@ public class ShutterSoundGUI extends JFrame {
 
         private Path adbExecutable;
 
+        private List<String> getLinuxSamsungSerials() {
+            List<String> serials = new java.util.ArrayList<>();
+            try {
+                publish("[STEP 1] Scanning USB ports for Samsung devices (lsusb)...");
+                // 1. Find Samsung device IDs
+                CommandResult lsusbResult = executeCommand("lsusb");
+                java.util.regex.Pattern idPattern = java.util.regex.Pattern.compile("ID ([0-9a-fA-F]{4}:[0-9a-fA-F]{4}) Samsung");
+                java.util.regex.Matcher idMatcher = idPattern.matcher(lsusbResult.stdout);
+                
+                java.util.List<String> ids = new java.util.ArrayList<>();
+                while (idMatcher.find()) {
+                    ids.add(idMatcher.group(1));
+                }
+
+                if (ids.isEmpty()) {
+                    publish("> No Samsung USB devices detected via lsusb.");
+                    return serials;
+                }
+
+                publish("> Found " + ids.size() + " Samsung device(s) on USB bus. Extracting serials...");
+
+                // 2. Get iSerial for each Samsung ID
+                for (String id : ids) {
+                    CommandResult vResult = executeCommand("lsusb", "-v", "-d", id);
+                    java.util.regex.Pattern serialPattern = java.util.regex.Pattern.compile("iSerial\\s+\\d+\\s+(\\S+)");
+                    java.util.regex.Matcher serialMatcher = serialPattern.matcher(vResult.stdout);
+                    if (serialMatcher.find()) {
+                        String serial = serialMatcher.group(1);
+                        if (!serials.contains(serial)) {
+                            publish("> Detected physical device: " + serial);
+                            serials.add(serial);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                publish("Warning: Could not check physical USB devices (lsusb error).");
+            }
+            return serials;
+        }
+
+        private List<String> getWindowsSamsungSerials() {
+            List<String> serials = new java.util.ArrayList<>();
+            try {
+                publish("[STEP 1] Scanning USB ports for Samsung devices (PowerShell)...");
+                // Get InstanceId of present devices with Samsung's Vendor ID (04E8)
+                CommandResult psResult = executeCommand("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", 
+                    "Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match 'VID_04E8' } | Select-Object -ExpandProperty InstanceId");
+                
+                String[] lines = psResult.stdout.split("\\r?\\n");
+                for (String line : lines) {
+                    line = line.trim();
+                    if (line.isEmpty()) continue;
+                    int lastBackslash = line.lastIndexOf('\\');
+                    if (lastBackslash != -1 && lastBackslash < line.length() - 1) {
+                        String serial = line.substring(lastBackslash + 1);
+                        // Clean up composite device suffix if present
+                        if (serial.contains("&")) {
+                            serial = serial.split("&")[0];
+                        }
+                        if (!serials.contains(serial)) {
+                            publish("> Detected physical device: " + serial);
+                            serials.add(serial);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                publish("Warning: Could not check physical USB devices (PowerShell error).");
+            }
+            return serials;
+        }
+
         @Override
         protected String doInBackground() throws Exception {
             String os = System.getProperty("os.name").toLowerCase();
             String resourceFolder;
             List<String> fileList;
             String execName;
+            boolean isLinux = os.contains("linux");
+            boolean isWindows = os.contains("win");
 
-            if (os.contains("win")) {
+            if (isWindows) {
                 resourceFolder = "/adb-windows/";
                 fileList = ADB_FILES_WINDOWS;
                 execName = "adb.exe";
-            } else if (os.contains("linux")) {
+            } else if (isLinux) {
                 resourceFolder = "/adb-linux/";
                 fileList = ADB_FILES_LINUX;
                 execName = "adb";
@@ -255,8 +328,18 @@ public class ShutterSoundGUI extends JFrame {
             Path tempDir = unpackAdb(resourceFolder, fileList);
             adbExecutable = tempDir.resolve(execName);
 
-            publish("Checking for ADB devices...");
+            List<String> physicalSerials;
+            if (isLinux) {
+                physicalSerials = getLinuxSamsungSerials();
+            } else if (isWindows) {
+                physicalSerials = getWindowsSamsungSerials();
+            } else {
+                physicalSerials = new java.util.ArrayList<>();
+            }
+
+            publish("[STEP 2] Checking ADB connectivity and USB debugging status...");
             boolean deviceAuthorized = false;
+            List<String> authorizedSerials = new java.util.ArrayList<>();
 
             for (int i = 0; i < 12; i++) {
                 CommandResult adbDevicesResult = executeCommand(adbExecutable.toString(), "devices");
@@ -264,44 +347,78 @@ public class ShutterSoundGUI extends JFrame {
 
                 // Log the raw adb devices output
                 if (adbDevicesOutput.equals("List of devices attached")) {
-                    publish("adb devices: No device found.");
+                    publish("adb devices: No device found via ADB.");
                 } else {
                     publish("adb devices output:\n" + adbDevicesOutput);
                 }
 
-                if (adbDevicesOutput.matches("(?s).*List of devices attached.*\\sdevice\\s*")) {
-                    publish("Device is authorized.");
-                    deviceAuthorized = true;
-                    break;
-                } else if (adbDevicesOutput.contains("unauthorized")) {
-                    publish("Device unauthorized. Check phone to allow. Retrying... (" + (i + 1) + "/12)");
+                if (!physicalSerials.isEmpty()) {
+                    // Precise check: Match physical Samsung devices with authorized ones in ADB
+                    for (String serial : physicalSerials) {
+                        if (adbDevicesOutput.contains(serial + "\tdevice")) {
+                            if (!authorizedSerials.contains(serial)) {
+                                authorizedSerials.add(serial);
+                                publish("Device " + serial + " is authorized and ready.");
+                            }
+                            deviceAuthorized = true;
+                        } else if (adbDevicesOutput.contains(serial + "\tunauthorized")) {
+                            publish("Device " + serial + " found but UNAUTHORIZED. Check phone screen.");
+                        } else if (adbDevicesOutput.contains(serial)) {
+                            publish("Device " + serial + " found in unexpected state.");
+                        } else {
+                            // connected physically but not appearing in adb yet
+                        }
+                    }
                 } else {
-                    publish("No device found. Connect device & enable USB debugging. (" + (i + 1) + "/12)");
+                    // Fallback: Just look for any authorized device
+                    java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\S+)\\s+device").matcher(adbDevicesOutput);
+                    while (m.find()) {
+                        String serial = m.group(1);
+                        if (!authorizedSerials.contains(serial)) {
+                            authorizedSerials.add(serial);
+                            publish("Authorized device found: " + serial);
+                        }
+                        deviceAuthorized = true;
+                    }
                 }
-                Thread.sleep(5000);
+
+                if (deviceAuthorized) break;
+                
+                if (i < 11) {
+                    publish("Retrying in 5 seconds... (" + (i + 1) + "/12)");
+                    Thread.sleep(5000);
+                }
             }
 
-            if (deviceAuthorized) {
-                publish("Checking shutter sound setting...");
-                CommandResult getSoundResult = executeCommand(adbExecutable.toString(), "shell", "settings", "get", "system", "csc_pref_camera_forced_shutter_sound_key");
-                String currentSetting = getSoundResult.stdout.trim();
+            if (!authorizedSerials.isEmpty()) {
+                StringBuilder finalResult = new StringBuilder();
+                for (String targetSerial : authorizedSerials) {
+                    publish("Processing device: " + targetSerial);
+                    publish("Checking shutter sound setting for " + targetSerial + "...");
+                    
+                    CommandResult getSoundResult = executeCommand(adbExecutable.toString(), "-s", targetSerial, "shell", "settings", "get", "system", "csc_pref_camera_forced_shutter_sound_key");
+                    String currentSetting = getSoundResult.stdout.trim();
 
-                if ("1".equals(currentSetting)) {
-                    publish("Disabling shutter sound...");
-                    executeCommand(adbExecutable.toString(), "shell", "settings", "put", "system", "csc_pref_camera_forced_shutter_sound_key", "0");
-                    CommandResult verifyResult = executeCommand(adbExecutable.toString(), "shell", "settings", "get", "system", "csc_pref_camera_forced_shutter_sound_key");
-                    if ("0".equals(verifyResult.stdout.trim())) {
-                        return "Success! Camera shutter sound disabled.";
+                    if ("1".equals(currentSetting)) {
+                        publish("Disabling shutter sound on " + targetSerial + "...");
+                        executeCommand(adbExecutable.toString(), "-s", targetSerial, "shell", "settings", "put", "system", "csc_pref_camera_forced_shutter_sound_key", "0");
+                        CommandResult verifyResult = executeCommand(adbExecutable.toString(), "-s", targetSerial, "shell", "settings", "get", "system", "csc_pref_camera_forced_shutter_sound_key");
+                        if ("0".equals(verifyResult.stdout.trim())) {
+                            finalResult.append(targetSerial).append(": Success\n");
+                        } else {
+                            finalResult.append(targetSerial).append(": Error (Value: ").append(verifyResult.stdout.trim()).append(")\n");
+                        }
+                    } else if ("0".equals(currentSetting)) {
+                        finalResult.append(targetSerial).append(": Already disabled\n");
                     } else {
-                        return "Error: Failed to disable shutter sound. (Value: " + verifyResult.stdout.trim() + ")";
+                        finalResult.append(targetSerial).append(": Unknown status (").append(currentSetting).append(")\n");
                     }
-                } else if ("0".equals(currentSetting)) {
-                    return "Already disabled. No action needed.";
-                } else {
-                    publish("Unexpected status: " + currentSetting);
-                    return "Could not determine shutter sound status. (Output: " + currentSetting + ")";
                 }
+                return "Finished: \n" + finalResult.toString().trim();
             } else {
+                if (!physicalSerials.isEmpty()) {
+                    return "Timeout: Samsung device is connected via USB, but USB Debugging is not enabled or authorized.";
+                }
                 return "Timeout: No authorized device found.";
             }
         }
