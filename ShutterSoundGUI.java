@@ -30,8 +30,85 @@ public class ShutterSoundGUI extends JFrame {
         return (int) (value * scaleFactor);
     }
 
+    /**
+     * Returns preferred font with Korean support based on OS and locale, with fallbacks for better cross-platform compatibility.
+     */
+    private Font getPreferredFont(float baseSize) {
+        String osName = System.getProperty("os.name").toLowerCase();
+        
+        if (!osName.contains("win")) {
+            return null; // Linux/macOS: Use system default font for better native integration
+        }
+
+        // Locale-based font selection for cross-platform support
+        Locale locale = Locale.getDefault();
+        String language = locale.getLanguage();
+        
+        String[] preferredFontNames;
+        
+        if (language.equals("ko")) {
+            preferredFontNames = new String[]{"맑은 고딕", "Malgun Gothic", "Noto Sans CJK KR", "Noto Sans CJK", "굴림", "Gulim"};
+        } else if (language.equals("ja")) {
+            preferredFontNames = new String[]{"Meiryo", "Meiryo UI", "Yu Gothic", "Noto Sans CJK", "Noto Sans"};
+        } else if (language.equals("zh")) {
+            preferredFontNames = new String[]{"Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "Noto Sans CJK"};
+        } else {
+            preferredFontNames = new String[]{"Segoe UI", "Arial", "Noto Sans", "Liberation Sans", "DejaVu Sans", "Consolas"};
+        }
+        
+        String[] availableFonts = GraphicsEnvironment.getLocalGraphicsEnvironment().getAvailableFontFamilyNames();
+        
+        for (String preferredName : preferredFontNames) {
+            for (String availableName : availableFonts) {
+                if (availableName.equalsIgnoreCase(preferredName)) {
+                    System.out.println("Using font: " + preferredName);
+                    return new Font(preferredName, Font.PLAIN, (int) baseSize);
+                }
+            }
+        }
+        System.out.println("Using font: Dialog (fallback)");
+        return null;
+    }
+
+    /**
+     * Apply font to all UIManager components for consistent Korean text rendering
+     */
+    private void setUIFont(Font font) {
+        java.util.Enumeration<Object> keys = UIManager.getDefaults().keys();
+        while (keys.hasMoreElements()) {
+            Object key = keys.nextElement();
+            Object value = UIManager.get(key);
+            if (value instanceof Font) {
+                UIManager.put(key, font);
+            }
+        }
+    }
+
+    /**
+     * Show disclaimer dialog at startup
+     * @param bundle ResourceBundle for localization
+     * @return true if user accepts, false otherwise
+     */
+    private static boolean showDisclaimerDialog(ResourceBundle bundle) {
+        String title = bundle.getString("disclaimer.title");
+        String message = bundle.getString("disclaimer.message");
+        
+        // Replace escaped newlines in properties file
+        message = message.replace("\\n", "\n");
+        
+        int result = JOptionPane.showConfirmDialog(
+                null,
+                message,
+                title,
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE
+        );
+        
+        return result == JOptionPane.YES_OPTION;
+    }
+
     public ShutterSoundGUI() {
-        // 기본 언어 설정 (시스템 언어 우선, 없으면 한국어)
+        // Default language setting (system language, otherwise Korean)
         try {
             bundle = ResourceBundle.getBundle("messages");
         } catch (Exception e) {
@@ -47,6 +124,14 @@ public class ShutterSoundGUI extends JFrame {
         Font systemFont = UIManager.getFont("Label.font");
         float baseSize = (systemFont != null) ? systemFont.getSize2D() : 12.0f;
         this.scaleFactor = baseSize / 12.0f;
+        
+        // Override with preferred fonts: Malgun Gothic (Korean) > Noto Sans CJK > Gulim
+        Font preferredFont = getPreferredFont(baseSize);
+        if (preferredFont != null) {
+            systemFont = preferredFont;
+            // Apply preferred font to all UIManager components for Korean text support
+            setUIFont(preferredFont);
+        }
 
         setSize(scale(700), scale(500)); 
         setMinimumSize(new Dimension(scale(650), scale(480))); // Set minimum size to prevent layout breakage
@@ -67,6 +152,7 @@ public class ShutterSoundGUI extends JFrame {
         // Title/Header Label
         headerLabel = new JLabel("", SwingConstants.CENTER);
         headerLabel.setFont(systemFont != null ? systemFont.deriveFont(Font.BOLD, baseSize * 1.5f) : new Font(Font.DIALOG, Font.BOLD, scale(18)));
+        System.out.println("Title/Header Label font: " + headerLabel.getFont());
         headerLabel.setForeground(new Color(33, 33, 33));
         gbc.gridy = 0;
         gbc.insets = new Insets(0, 0, scale(10), 0);
@@ -75,6 +161,7 @@ public class ShutterSoundGUI extends JFrame {
         // Status Label (Current Step)
         statusLabel = new JLabel("", SwingConstants.CENTER);
         statusLabel.setFont(systemFont != null ? systemFont.deriveFont(baseSize * 1.15f) : new Font(Font.DIALOG, Font.PLAIN, scale(14)));
+        System.out.println("Status Label font: " + statusLabel.getFont());
         statusLabel.setForeground(new Color(66, 66, 66));
         gbc.gridy = 1;
         gbc.insets = new Insets(0, 0, scale(15), 0);
@@ -184,10 +271,23 @@ public class ShutterSoundGUI extends JFrame {
 
     private JComponent createImageLabel(String fileName) {
         try {
-            InputStream is = getClass().getResourceAsStream("/" + fileName);
-            if (is == null) is = getClass().getResourceAsStream(fileName);
+            // Convert fileName (e.g., "donate_npay.png") to base64 file (e.g., "donate_npay.b64")
+            String base64FileName = fileName.substring(0, fileName.lastIndexOf('.')) + ".b64";
+            
+            // Load Base64 encoded file from resources/folder
+            InputStream is = getClass().getResourceAsStream("/resources/" + base64FileName);
+            if (is == null) is = getClass().getResourceAsStream("resources/" + base64FileName);
+            
             if (is != null) {
-                Image img = new ImageIcon(is.readAllBytes()).getImage();
+                // Read Base64 string from file
+                String base64String = new String(is.readAllBytes()).trim();
+                
+                // Decode Base64 to byte array
+                byte[] imageBytes = java.util.Base64.getDecoder().decode(base64String);
+                
+                // Create Image from byte array
+                Image img = new ImageIcon(imageBytes).getImage();
+                
                 JPanel panel = new JPanel() {
                     @Override
                     protected void paintComponent(Graphics g) {
@@ -626,6 +726,20 @@ public class ShutterSoundGUI extends JFrame {
     }
 
     public static void main(String[] args) {
+        // Load ResourceBundle for disclaimer localization
+        ResourceBundle bundle;
+        try {
+            bundle = ResourceBundle.getBundle("messages");
+        } catch (Exception e) {
+            bundle = ResourceBundle.getBundle("messages", Locale.KOREAN);
+        }
+        
+        // Show disclaimer first
+        if (!showDisclaimerDialog(bundle)) {
+            System.out.println("User declined the disclaimer. Exiting.");
+            System.exit(0);
+        }
+        
         // Run the GUI on the Event Dispatch Thread
         SwingUtilities.invokeLater(() -> {
             ShutterSoundGUI gui = new ShutterSoundGUI();
