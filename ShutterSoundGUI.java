@@ -481,8 +481,10 @@ public class ShutterSoundGUI extends JFrame {
     }
 
     private class AdbWorker extends SwingWorker<String, String> {
-        private static final String STEP_1_MESSAGE_SCANNING_WINDOWS = "[STEP 1] Scanning USB ports for Samsung devices (PowerShell)...";
-        private static final String SAMSUNG_VENDOR_ID = "VID_04E8";
+        private final String STEP_1_MESSAGE_SCANNING = IS_WINDOWS 
+            ? "[STEP 1] Scanning USB ports for Samsung devices (PowerShell)..."
+            : "[STEP 1] Scanning USB ports for Samsung devices (sysfs)...";
+        private static final String SAMSUNG_VENDOR_ID = "04E8";
         private static final String DEVICE_DETECTED_MESSAGE = "> Detected Samsung physical device serial: ";
         private static final String STEP_2_MESSAGE_ADB_CHECK = "[STEP 2] Checking ADB connectivity and USB debugging status...";
         private static final String ADB_COMMAND_DEVICES = "devices";
@@ -494,7 +496,6 @@ public class ShutterSoundGUI extends JFrame {
         private static final String DEVICE_PREFIX_MESSAGE = "Device ";
         private static final String DEVICE_AUTHORIZED_SUFFIX = " is authorized and ready.";
         private static final String DEVICE_UNAUTHORIZED_SUFFIX = " found but UNAUTHORIZED. Check phone screen.";
-        private static final String DEVICE_UNEXPECTED_STATE_SUFFIX = " found in unexpected state.";
         private static final String AUTHORIZED_DEVICE_FOUND_MESSAGE = "Authorized device found: ";
         private static final String RETRY_MESSAGE = "Retrying in 5 seconds... (";
         private static final int DEVICE_CHECK_MAX_RETRIES = 12;
@@ -514,26 +515,55 @@ public class ShutterSoundGUI extends JFrame {
         private static final String RESULT_TIMEOUT_NO_DEVICE = "Timeout: No authorized device found.";
 
         private final List<String> ADB_FILES_WINDOWS = Arrays.asList("adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll", "etc1tool.exe", "fastboot.exe", "hprof-conv.exe", "libwinpthread-1.dll", "make_f2fs_casefold.exe", "make_f2fs.exe", "mke2fs.conf", "mke2fs.exe", "NOTICE.txt", "source.properties", "sqlite3.exe");
+        private final List<String> ADB_FILES_LINUX = Arrays.asList("adb", "etc1tool", "fastboot", "hprof-conv", "make_f2fs", "make_f2fs_casefold", "mke2fs", "mke2fs.conf", "NOTICE.txt", "source.properties", "sqlite3", "lib64/libc++.so");
         private Path adbExecutable;
 
         private List<String> detectPhysicalDevices() {
             List<String> serials = new java.util.ArrayList<>();
             try {
-                publish(STEP_1_MESSAGE_SCANNING_WINDOWS);
-                CommandResult psResult = executeCommand("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match '" + SAMSUNG_VENDOR_ID + "' } | Select-Object -ExpandProperty InstanceId");
-                String[] lines = psResult.stdout.split("\\r?\\n");
-                for (String line : lines) {
-                    line = line.trim();
-                    if (line.isEmpty()) continue;
-                    int lastBackslash = line.lastIndexOf('\\');
-                    if (lastBackslash != -1 && lastBackslash < line.length() - 1) {
-                        String serial = line.substring(lastBackslash + 1);
-                        if (serial.contains("&")) serial = serial.split("&")[0];
-                        if (serial.matches("[0-9]+")) continue;
-                        if (serial.length() < 6) continue;
-                        if (!serials.contains(serial)) {
-                            publish(DEVICE_DETECTED_MESSAGE + serial);
-                            serials.add(serial);
+                publish(STEP_1_MESSAGE_SCANNING);
+                if (IS_WINDOWS) {
+                    CommandResult psResult = executeCommand("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match 'VID_" + SAMSUNG_VENDOR_ID + "' } | Select-Object -ExpandProperty InstanceId");
+                    String[] lines = psResult.stdout.split("\\r?\\n");
+                    for (String line : lines) {
+                        line = line.trim();
+                        if (line.isEmpty()) continue;
+                        int lastBackslash = line.lastIndexOf('\\');
+                        if (lastBackslash != -1 && lastBackslash < line.length() - 1) {
+                            String serial = line.substring(lastBackslash + 1);
+                            if (serial.contains("&")) serial = serial.split("&")[0];
+                            if (serial.matches("[0-9]+")) continue;
+                            if (serial.length() < 6) continue;
+                            if (!serials.contains(serial)) {
+                                publish(DEVICE_DETECTED_MESSAGE + serial);
+                                serials.add(serial);
+                            }
+                        }
+                    }
+                } else {
+                    // Linux: Direct sysfs scan for Samsung devices (VID 04e8)
+                    java.io.File usbDevices = new java.io.File("/sys/bus/usb/devices");
+                    if (usbDevices.exists() && usbDevices.isDirectory()) {
+                        java.io.File[] devices = usbDevices.listFiles();
+                        if (devices != null) {
+                            for (java.io.File dev : devices) {
+                                try {
+                                    java.io.File vendorIdFile = new java.io.File(dev, "idVendor");
+                                    if (vendorIdFile.exists()) {
+                                        String vendorId = Files.readString(vendorIdFile.toPath()).trim();
+                                        if (vendorId.equalsIgnoreCase(SAMSUNG_VENDOR_ID)) {
+                                            java.io.File serialFile = new java.io.File(dev, "serial");
+                                            if (serialFile.exists()) {
+                                                String serial = Files.readString(serialFile.toPath()).trim();
+                                                if (!serial.isEmpty() && !serials.contains(serial)) {
+                                                    publish(DEVICE_DETECTED_MESSAGE + serial);
+                                                    serials.add(serial);
+                                                }
+                                            }
+                                        }
+                                    }
+                                } catch (Exception ignored) {}
+                            }
                         }
                     }
                 }
@@ -613,12 +643,25 @@ public class ShutterSoundGUI extends JFrame {
         protected String doInBackground() throws Exception {
             detectDarkMode();
             Path tempDir = Files.createTempDirectory("adb-gui-temp-");
-            adbExecutable = tempDir.resolve("adb.exe");
-            for (String fileName : ADB_FILES_WINDOWS) {
-                try (InputStream is = ShutterSoundGUI.class.getResourceAsStream("/adb-windows/" + fileName)) {
-                    Files.copy(is, tempDir.resolve(fileName), StandardCopyOption.REPLACE_EXISTING);
+            String adbFileName = IS_WINDOWS ? "adb.exe" : "adb";
+            adbExecutable = tempDir.resolve(adbFileName);
+            
+            List<String> adbFiles = IS_WINDOWS ? ADB_FILES_WINDOWS : ADB_FILES_LINUX;
+            String adbResourcePrefix = IS_WINDOWS ? "/adb-windows/" : "/adb-linux/";
+
+            for (String fileName : adbFiles) {
+                try (InputStream is = ShutterSoundGUI.class.getResourceAsStream(adbResourcePrefix + fileName)) {
+                    if (is != null) {
+                        Path targetPath = tempDir.resolve(fileName);
+                        Files.createDirectories(targetPath.getParent());
+                        Files.copy(is, targetPath, StandardCopyOption.REPLACE_EXISTING);
+                        if (!IS_WINDOWS && (fileName.equals("adb") || fileName.contains("mke2fs") || fileName.contains("fastboot"))) {
+                            targetPath.toFile().setExecutable(true);
+                        }
+                    }
                 }
             }
+            
             List<String> physicalSerials = detectPhysicalDevices();
             if (physicalSerials.isEmpty()) return "No Samsung devices found.";
             publish(STEP_2_MESSAGE_ADB_CHECK);
