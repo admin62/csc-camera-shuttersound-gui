@@ -500,7 +500,7 @@ public class ShutterSoundGUI extends JFrame {
         private static final String RETRY_MESSAGE = "Retrying in 5 seconds... (";
         private static final int DEVICE_CHECK_MAX_RETRIES = 12;
         private static final long RETRY_INTERVAL_MS = 5000;
-        private static final String SHUTTER_SOUND_SETTING_KEY = "csc_pref_camera_forced_shutter_sound_key";
+        private static final String SHUTTER_SOUND_SETTING_KEY = "csc_pref_camera_forced_shuttersound_key";
         private static final String SHUTTER_SOUND_VALUE_ENABLED = "1";
         private static final String SHUTTER_SOUND_VALUE_DISABLED = "0";
         private static final String CHECKING_SHUTTER_SOUND_MESSAGE = "Checking shutter sound setting for ";
