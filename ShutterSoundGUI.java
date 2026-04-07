@@ -709,6 +709,7 @@ public class ShutterSoundGUI extends JFrame {
     }
 
     private static boolean isAdmin() {
+        if (!IS_WINDOWS) return true; // Only Windows requires admin check for certain PnP operations
         try {
             Process p = new ProcessBuilder("net", "session").start();
             return p.waitFor() == 0;
@@ -716,22 +717,39 @@ public class ShutterSoundGUI extends JFrame {
     }
 
     private static void runAsAdmin() throws Exception {
-        String jarPath = ShutterSoundGUI.class.getProtectionDomain().getCodeSource().getLocation().toURI().getPath();
-        if (jarPath.startsWith("/") && jarPath.contains(":")) jarPath = jarPath.substring(1);
-        new ProcessBuilder("powershell.exe", "-NoProfile", "-Command", "Start-Process javaw -ArgumentList '-jar \"\"" + jarPath + "\"\"' -Verb RunAs").start();
+        java.net.URL location = ShutterSoundGUI.class.getProtectionDomain().getCodeSource().getLocation();
+        java.io.File jarFile = new java.io.File(location.toURI());
+        String jarPath = jarFile.getAbsolutePath();
+        
+        // Use javaw.exe (Windowed version) to hide the console window
+        String javaExe = System.getProperty("java.home") + java.io.File.separator + "bin" + java.io.File.separator + "javaw.exe";
+        
+        // PowerShell handles single-quoted strings very well for paths with spaces.
+        // We escape any single quotes in the path by doubling them (PowerShell rule).
+        String escapedJavaExe = javaExe.replace("'", "''");
+        String escapedJarPath = jarPath.replace("'", "''");
+
+        String psCommand = String.format("Start-Process '%s' -ArgumentList '-jar', '%s' -Verb RunAs", escapedJavaExe, escapedJarPath);
+        new ProcessBuilder("powershell.exe", "-NoProfile", "-Command", psCommand).start();
     }
 
     public static void main(String[] args) {
         detectDarkMode();
         try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); } catch (Exception ignored) {}
+        
         ResourceBundle bundle;
         try { bundle = ResourceBundle.getBundle("messages", new UTF8Control()); } 
         catch (Exception e) { bundle = ResourceBundle.getBundle("messages", Locale.KOREAN, new UTF8Control()); }
 
+        // Self-elevation: Only for Windows and only when running as a JAR
         if (IS_WINDOWS && !isAdmin()) {
             try {
-                String path = ShutterSoundGUI.class.getProtectionDomain().getCodeSource().getLocation().getPath();
-                if (path.toLowerCase().endsWith(".jar")) { runAsAdmin(); System.exit(0); }
+                java.net.URL location = ShutterSoundGUI.class.getProtectionDomain().getCodeSource().getLocation();
+                java.io.File file = new java.io.File(location.toURI());
+                if (file.getName().toLowerCase().endsWith(".jar")) {
+                    runAsAdmin();
+                    System.exit(0);
+                }
             } catch (Exception ignored) {}
         }
 
