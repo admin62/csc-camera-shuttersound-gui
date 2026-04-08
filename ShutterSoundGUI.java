@@ -504,11 +504,11 @@ public class ShutterSoundGUI extends JFrame {
         private static final String SHUTTER_SOUND_VALUE_ENABLED = "1";
         private static final String SHUTTER_SOUND_VALUE_DISABLED = "0";
         private static final String CHECKING_SHUTTER_SOUND_MESSAGE = "Checking shutter sound setting for ";
+        private static final String ENABLING_SHUTTER_SOUND_MESSAGE = "Enabling shutter sound on ";
         private static final String DISABLING_SHUTTER_SOUND_MESSAGE = "Disabling shutter sound on ";
-        private static final String SUCCESS_SUFFIX = " -> SUCCESS: Shutter sound disabled.";
+        private static final String SUCCESS_ENABLED_SUFFIX = " -> SUCCESS: Shutter sound ENABLED.";
+        private static final String SUCCESS_DISABLED_SUFFIX = " -> SUCCESS: Shutter sound DISABLED.";
         private static final String ERROR_SUFFIX = " -> ERROR: Failed to update (Value: ";
-        private static final String ALREADY_DISABLED_SUFFIX = " -> DONE: Already disabled.";
-        private static final String UNKNOWN_STATUS_SUFFIX = " -> FAILED: Could not read setting (";
         private static final String STEP_FINISH_PREFIX = "[FINISH] ";
         private static final String RESULT_FINISHED_HEADER = "Finished: \n";
         private static final String RESULT_TIMEOUT_WITH_DEVICE = "Timeout: Samsung device is connected via USB, but USB Debugging is not enabled or authorized.";
@@ -517,13 +517,14 @@ public class ShutterSoundGUI extends JFrame {
         private final List<String> ADB_FILES_WINDOWS = Arrays.asList("adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll", "etc1tool.exe", "fastboot.exe", "hprof-conv.exe", "libwinpthread-1.dll", "make_f2fs_casefold.exe", "make_f2fs.exe", "mke2fs.conf", "mke2fs.exe", "NOTICE.txt", "source.properties", "sqlite3.exe");
         private final List<String> ADB_FILES_LINUX = Arrays.asList("adb", "etc1tool", "fastboot", "hprof-conv", "make_f2fs", "make_f2fs_casefold", "mke2fs", "mke2fs.conf", "NOTICE.txt", "source.properties", "sqlite3", "lib64/libc++.so");
         private Path adbExecutable;
+        private java.util.Map<String, String> adbEnv;
 
         private List<String> detectPhysicalDevices() {
             List<String> serials = new java.util.ArrayList<>();
             try {
                 publish(STEP_1_MESSAGE_SCANNING);
                 if (IS_WINDOWS) {
-                    CommandResult psResult = executeCommand("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match 'VID_" + SAMSUNG_VENDOR_ID + "' } | Select-Object -ExpandProperty InstanceId");
+                    CommandResult psResult = executeCommand(null, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match 'VID_" + SAMSUNG_VENDOR_ID + "' } | Select-Object -ExpandProperty InstanceId");
                     String[] lines = psResult.stdout.split("\\r?\\n");
                     for (String line : lines) {
                         line = line.trim();
@@ -541,6 +542,7 @@ public class ShutterSoundGUI extends JFrame {
                         }
                     }
                 } else {
+                    publish("Starting sysfs scan for Samsung devices...");
                     // Linux: Direct sysfs scan for Samsung devices (VID 04e8)
                     java.io.File usbDevices = new java.io.File("/sys/bus/usb/devices");
                     if (usbDevices.exists() && usbDevices.isDirectory()) {
@@ -552,13 +554,40 @@ public class ShutterSoundGUI extends JFrame {
                                     if (vendorIdFile.exists()) {
                                         String vendorId = Files.readString(vendorIdFile.toPath()).trim();
                                         if (vendorId.equalsIgnoreCase(SAMSUNG_VENDOR_ID)) {
-                                            java.io.File serialFile = new java.io.File(dev, "serial");
-                                            if (serialFile.exists()) {
-                                                String serial = Files.readString(serialFile.toPath()).trim();
-                                                if (!serial.isEmpty() && !serials.contains(serial)) {
-                                                    publish(DEVICE_DETECTED_MESSAGE + serial);
-                                                    serials.add(serial);
+                                            String productId = "Unknown";
+                                            try { productId = Files.readString(new java.io.File(dev, "idProduct").toPath()).trim(); } catch (Exception ignored) {}
+                                            String manufacturer = "Unknown";
+                                            try { manufacturer = Files.readString(new java.io.File(dev, "manufacturer").toPath()).trim(); } catch (Exception ignored) {}
+
+                                            publish("Found Samsung device: PID=" + productId + (manufacturer.equals("Unknown") ? "" : ", Manufacturer=" + manufacturer));
+
+                                            boolean hasAdb = false;
+                                            java.io.File[] subFiles = dev.listFiles();
+                                            if (subFiles != null) {
+                                                for (java.io.File sub : subFiles) {
+                                                    if (sub.isDirectory()) {
+                                                        java.io.File bCls = new java.io.File(sub, "bInterfaceClass");
+                                                        if (bCls.exists()) {
+                                                            if ("ff".equalsIgnoreCase(Files.readString(bCls.toPath()).trim())) {
+                                                                hasAdb = true;
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
                                                 }
+                                            }
+
+                                            if (hasAdb) {
+                                                java.io.File serialFile = new java.io.File(dev, "serial");
+                                                if (serialFile.exists()) {
+                                                    String serial = Files.readString(serialFile.toPath()).trim();
+                                                    if (!serial.isEmpty() && !serials.contains(serial)) {
+                                                        publish(DEVICE_DETECTED_MESSAGE + serial);
+                                                        serials.add(serial);
+                                                    }
+                                                }
+                                            } else {
+                                                publish("Found Samsung device [" + productId + "] but it lacks an ADB interface. Is USB Debugging enabled?");
                                             }
                                         }
                                     }
@@ -566,6 +595,10 @@ public class ShutterSoundGUI extends JFrame {
                             }
                         }
                     }
+                    if (serials.isEmpty()) {
+                        publish("No Samsung devices with ADB interface found in /sys/bus/usb/devices");
+                    }
+                    publish("Finished sysfs scan.");
                 }
             } catch (Exception ignored) {}
             return serials;
@@ -575,10 +608,22 @@ public class ShutterSoundGUI extends JFrame {
             List<String> authorizedSerials = new java.util.ArrayList<>();
             boolean deviceAuthorized = false;
             for (int i = 0; i < DEVICE_CHECK_MAX_RETRIES; i++) {
-                CommandResult adbDevicesResult = executeCommand(adbExecutable.toString(), ADB_COMMAND_DEVICES);
+                CommandResult adbDevicesResult = executeCommand(adbEnv, adbExecutable.toString(), ADB_COMMAND_DEVICES);
                 String adbDevicesOutput = adbDevicesResult.stdout.trim();
-                if (adbDevicesOutput.equals(ADB_DEVICES_EMPTY_RESPONSE)) publish("adb devices: No device found.");
-                else publish(ADB_DEVICES_OUTPUT_HEADER + adbDevicesOutput);
+                String adbDevicesError = adbDevicesResult.stderr.trim();
+
+                publish(ADB_DEVICES_OUTPUT_HEADER + adbDevicesOutput + (adbDevicesError.isEmpty() ? "" : "\nError: " + adbDevicesError));
+
+                if (adbDevicesOutput.equals(ADB_DEVICES_EMPTY_RESPONSE)) {
+                    publish("adb devices: No device found.");
+                    if (i == 0) {
+                        publish("Check if 'USB Debugging' is enabled in Developer Options and the USB mode is set to 'File Transfer'.");
+                    }
+                } else {
+                    if (!IS_WINDOWS && adbDevicesOutput.contains("no permissions")) {
+                        publish("Tip: On Linux, you might need to run with 'sudo -E java -jar ...' or setup udev rules if you see 'no permissions'.");
+                    }
+                }
 
                 if (!physicalSerials.isEmpty()) {
                     for (String serial : physicalSerials) {
@@ -610,31 +655,49 @@ public class ShutterSoundGUI extends JFrame {
             return authorizedSerials;
         }
 
-        private String disableShutterSoundOnDevices(List<String> authorizedSerials) throws IOException, InterruptedException {
+        private String toggleShutterSoundOnDevices(List<String> authorizedSerials) throws IOException, InterruptedException {
             StringBuilder finalResult = new StringBuilder();
             for (String targetSerial : authorizedSerials) {
                 String deviceInfo = getDeviceInfo(targetSerial);
                 publish("Device: " + targetSerial + " [" + deviceInfo + "]");
                 publish(CHECKING_SHUTTER_SOUND_MESSAGE + targetSerial + "...");
-                CommandResult getSoundResult = executeCommand(adbExecutable.toString(), "-s", targetSerial, "shell", "settings", "get", "system", SHUTTER_SOUND_SETTING_KEY);
+                CommandResult getSoundResult = executeCommand(adbEnv, adbExecutable.toString(), "-s", targetSerial, "shell", "settings", "get", "system", SHUTTER_SOUND_SETTING_KEY);
                 String currentSetting = getSoundResult.stdout.trim();
                 String devicePrefix = String.format("[%s] (%s)", targetSerial, deviceInfo);
-                if (SHUTTER_SOUND_VALUE_ENABLED.equals(currentSetting)) {
-                    publish(DISABLING_SHUTTER_SOUND_MESSAGE + targetSerial + "...");
-                    executeCommand(adbExecutable.toString(), "-s", targetSerial, "shell", "settings", "put", "system", SHUTTER_SOUND_SETTING_KEY, SHUTTER_SOUND_VALUE_DISABLED);
-                    CommandResult verifyResult = executeCommand(adbExecutable.toString(), "-s", targetSerial, "shell", "settings", "get", "system", SHUTTER_SOUND_SETTING_KEY);
-                    if (SHUTTER_SOUND_VALUE_DISABLED.equals(verifyResult.stdout.trim())) finalResult.append(devicePrefix).append(SUCCESS_SUFFIX).append("\n");
-                    else finalResult.append(devicePrefix).append(ERROR_SUFFIX).append(verifyResult.stdout.trim()).append(")\n");
-                } else if (SHUTTER_SOUND_VALUE_DISABLED.equals(currentSetting)) finalResult.append(devicePrefix).append(ALREADY_DISABLED_SUFFIX).append("\n");
-                else finalResult.append(devicePrefix).append(UNKNOWN_STATUS_SUFFIX).append(currentSetting).append(")\n");
+
+                String newValue;
+                String actionMessage;
+                String successSuffix;
+
+                if (SHUTTER_SOUND_VALUE_DISABLED.equals(currentSetting)) {
+                    newValue = SHUTTER_SOUND_VALUE_ENABLED;
+                    actionMessage = ENABLING_SHUTTER_SOUND_MESSAGE;
+                    successSuffix = SUCCESS_ENABLED_SUFFIX;
+                } else {
+                    // Default to disabling if setting is "1", "null", or any other value
+                    newValue = SHUTTER_SOUND_VALUE_DISABLED;
+                    actionMessage = DISABLING_SHUTTER_SOUND_MESSAGE;
+                    successSuffix = SUCCESS_DISABLED_SUFFIX;
+                }
+
+                publish(actionMessage + targetSerial + "...");
+                executeCommand(adbEnv, adbExecutable.toString(), "-s", targetSerial, "shell", "settings", "put", "system", SHUTTER_SOUND_SETTING_KEY, newValue);
+                CommandResult verifyResult = executeCommand(adbEnv, adbExecutable.toString(), "-s", targetSerial, "shell", "settings", "get", "system", SHUTTER_SOUND_SETTING_KEY);
+                String verifiedSetting = verifyResult.stdout.trim();
+
+                if (newValue.equals(verifiedSetting)) {
+                    finalResult.append(devicePrefix).append(successSuffix).append("\n");
+                } else {
+                    finalResult.append(devicePrefix).append(ERROR_SUFFIX).append(verifiedSetting).append(")\n");
+                }
             }
             return finalResult.toString().trim();
         }
 
         private String getDeviceInfo(String serial) {
             try {
-                String model = executeCommand(adbExecutable.toString(), "-s", serial, "shell", "getprop", "ro.product.model").stdout.trim();
-                String brand = executeCommand(adbExecutable.toString(), "-s", serial, "shell", "getprop", "ro.product.brand").stdout.trim();
+                String model = executeCommand(adbEnv, adbExecutable.toString(), "-s", serial, "shell", "getprop", "ro.product.model").stdout.trim();
+                String brand = executeCommand(adbEnv, adbExecutable.toString(), "-s", serial, "shell", "getprop", "ro.product.brand").stdout.trim();
                 return brand + " " + model;
             } catch (Exception e) { return "Unknown Device"; }
         }
@@ -661,12 +724,37 @@ public class ShutterSoundGUI extends JFrame {
                     }
                 }
             }
+            publish("ADB files extracted to: " + tempDir.toString());
+
+            if (!IS_WINDOWS) {
+                adbEnv = new java.util.HashMap<>(System.getenv());
+                String ldPath = tempDir.toString() + ":" + tempDir.resolve("lib64").toString();
+                String existingLdPath = adbEnv.get("LD_LIBRARY_PATH");
+                if (existingLdPath != null && !existingLdPath.isEmpty()) {
+                    ldPath += ":" + existingLdPath;
+                }
+                adbEnv.put("LD_LIBRARY_PATH", ldPath);
+                adbEnv.put("HOME", System.getProperty("user.home"));
+
+                // Ensure fresh, privileged ADB server on Linux
+                try {
+                    executeCommand(adbEnv, adbExecutable.toString(), "kill-server");
+                } catch (Exception ignored) {}
+            }
+
+            // Verify ADB version/compatibility
+            try {
+                CommandResult versionResult = executeCommand(adbEnv, adbExecutable.toString(), "version");
+                publish("ADB version check:\n" + versionResult.stdout + (versionResult.stderr.isEmpty() ? "" : "\nError: " + versionResult.stderr));
+            } catch (Exception e) {
+                publish("Failed to execute adb version: " + e.getMessage());
+            }
             
             List<String> physicalSerials = detectPhysicalDevices();
             if (physicalSerials.isEmpty()) return "No Samsung devices found.";
             publish(STEP_2_MESSAGE_ADB_CHECK);
             List<String> authorizedSerials = waitForAdbAuthorization(physicalSerials);
-            if (!authorizedSerials.isEmpty()) return RESULT_FINISHED_HEADER + disableShutterSoundOnDevices(authorizedSerials);
+            if (!authorizedSerials.isEmpty()) return RESULT_FINISHED_HEADER + toggleShutterSoundOnDevices(authorizedSerials);
             return physicalSerials.isEmpty() ? RESULT_TIMEOUT_NO_DEVICE : RESULT_TIMEOUT_WITH_DEVICE;
         }
 
@@ -693,19 +781,44 @@ public class ShutterSoundGUI extends JFrame {
 
         private String getTimestamp() { return LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")); }
 
-        private CommandResult executeCommand(String... command) throws IOException, InterruptedException {
+        private CommandResult executeCommand(java.util.Map<String, String> env, String... command) throws IOException, InterruptedException {
             ProcessBuilder pb = new ProcessBuilder(command);
-            pb.redirectErrorStream(true);
+            if (env != null) {
+                pb.environment().putAll(env);
+            }
             Process process = pb.start();
             StringBuilder stdout = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) stdout.append(line).append(System.lineSeparator());
-            }
+            StringBuilder stderr = new StringBuilder();
+
+            Thread outThread = new Thread(() -> {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) stdout.append(line).append(System.lineSeparator());
+                } catch (IOException ignored) {}
+            });
+            Thread errThread = new Thread(() -> {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) stderr.append(line).append(System.lineSeparator());
+                } catch (IOException ignored) {}
+            });
+
+            outThread.start();
+            errThread.start();
+
             process.waitFor();
-            return new CommandResult(stdout.toString());
+            outThread.join();
+            errThread.join();
+            return new CommandResult(stdout.toString(), stderr.toString());
         }
-        private class CommandResult { final String stdout; CommandResult(String stdout) { this.stdout = stdout; } }
+        private class CommandResult { 
+            final String stdout; 
+            final String stderr; 
+            CommandResult(String stdout, String stderr) { 
+                this.stdout = stdout; 
+                this.stderr = stderr; 
+            } 
+        }
     }
 
     private static boolean isAdmin() {
